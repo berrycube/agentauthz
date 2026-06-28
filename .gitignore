@@ -1,0 +1,33 @@
+# Python virtual environment
+.venv/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# OS noise
+.DS_Store
+
+# ----------------------------------------------------------------------------
+# Local-only — kept on disk for development, never published.
+# (build machinery, internal design/process docs, agent config, launch playbook)
+# ----------------------------------------------------------------------------
+.claude/
+CLAUDE.md
+
+# SDD build machinery + internal design/process docs
+process/
+SPEC.md
+HANDOFF.md
+SETUP.md
+RENAME-CHECKLIST.md
+docs/STATE.md
+docs/BACKLOG.md
+docs/E2-PLAN.md
+docs/superpowers/
+
+# Launch playbook (private; the blog itself lives in docs/ and is published)
+docs/launch/
