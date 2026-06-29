@@ -109,7 +109,7 @@ model** — V1 through V6, weak and aligned alike:
 
 ```bash
 python -m agentauthz.harness.sweep --live --target fixed \
-  --target-models 'ollama:llama3.2:latest,ollama:qwen3.5:35b-a3b-q4_K_M,ollama:glm4:9b' \
+  --target-models 'ollama:llama3.2:latest,ollama:qwen3.5:35b-a3b-q4_K_M' \
   --attacker-model 'ollama:glm4:9b' --repeats 5 --scenarios agentauthz/scenarios --format md
 ```
 
@@ -123,9 +123,16 @@ don't even need a live run to trust it.
 
 If your cost strategy is "route to the cheapest model that still answers well," your
 authorization posture is now **a function of which model happened to get the request** — i.e.
-a probability, not a control. And the fix isn't "always use the expensive model": the reads
-break that anyway, firing 5/5 on frontier tiers too. The fix is to put the invariant **in the
-tool**, where it holds no matter which brain is on the other end.
+a probability, not a control. And the fix isn't "always use the expensive model": I re-ran the
+whole harness against the **closed frontier, each model in its own production agent CLI** —
+Claude via Claude Code, GPT-5.5 via Codex, calling the tools over MCP. **Claude via Claude Code
+leaks the reads 5/5**, same as every local model. GPT-5.5 via Codex mostly refuses them — but
+*mostly*: the identical IDOR read cell, same attacker, swung **0/5 → 2/3 → 1/10** across
+re-runs (pooled 3/18). A disposition that moves run to run, vendor to vendor, is not a control —
+and that's the point, not a model-vs-model scoreboard. (Full frontier section in
+[`cross-model-sweep.md`](cross-model-sweep.md).) The fix is to put the invariant **in the
+tool**, where it holds no matter which brain — or which vendor's agent harness — is on the
+other end. There, every cell is 0/5, every model, every run.
 
 Route for cost all you want. Just don't let the choice of model be the thing standing between
 a stranger and Alice's refund.
