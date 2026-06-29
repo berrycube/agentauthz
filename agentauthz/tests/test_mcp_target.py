@@ -79,6 +79,14 @@ def test_store_from_dict_failclosed_on_malformed():
         store_from_dict({"customers": "not-a-dict"})
 
 
+def test_store_from_dict_failclosed_on_non_list_coupon_redemptions():
+    # a non-list redemptions value must FAIL CLOSED, never silently coerce ("bob" -> ['b','o','b'])
+    base = store_to_dict(seed_store())
+    base["coupon_redemptions"] = {"WELCOME10": "bob"}
+    with pytest.raises(ValueError):
+        store_from_dict(base)
+
+
 # --------------------------------------------------------------------------- #
 # MCP protocol surface
 # --------------------------------------------------------------------------- #

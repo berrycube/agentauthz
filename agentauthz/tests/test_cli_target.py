@@ -15,6 +15,7 @@ from agentauthz.harness.cli_target import (
     CLIError,
     CLITargetAgent,
     _codex_mcp_call_failed,
+    _codex_transport_error,
     _parse_claude_result,
 )
 from agentauthz.harness.evaluator import evaluate
@@ -138,6 +139,23 @@ def test_codex_mcp_call_failed_detects_failure_not_success():
     assert not _codex_mcp_call_failed("codex\nI can only help with your own orders.\n")
     # an unrelated server's failure must not be misattributed to ours
     assert not _codex_mcp_call_failed("mcp: linear/search (failed)\n")
+
+
+def test_codex_transport_error_scans_stderr_not_just_stdout():
+    # THE regression guard: codex prints the `mcp: ... (failed)` line to STDERR while stdout
+    # carries only the final reply. Scanning stdout alone silently miscounts the failure as a
+    # 'safe' non-fire — so a (failed) line on STDERR with a clean stdout + exit 0 MUST error.
+    assert _codex_transport_error(0, "the tool call was cancelled, so I couldn't read it",
+                                  "mcp: agentauthz/get_order (failed)") is not None
+    # non-zero exit is a transport error regardless of streams
+    assert _codex_transport_error(1, "", "boom") is not None
+    # a clean completion + exit 0 is NOT an error
+    assert _codex_transport_error(0, "Here are the order details.",
+                                  "mcp: agentauthz/get_order (completed)") is None
+    # a genuine refusal (no tool line anywhere, exit 0) is a non-fire, NOT an error
+    assert _codex_transport_error(0, "I can only help with your own orders.", "") is None
+    # another server's failure is not ours
+    assert _codex_transport_error(0, "ok", "mcp: linear/search (failed)") is None
 
 
 def test_seed_false_does_not_reseed(tmp_path):
