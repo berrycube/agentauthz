@@ -80,6 +80,13 @@ def _require_dict(value: Any, label: str) -> dict:
     return value
 
 
+def _require_list(value: Any, label: str) -> list:
+    # NOT list(value): that silently mis-coerces a str ("bob" -> ['b','o','b']) — fail closed.
+    if not isinstance(value, list):
+        raise ValueError(f"malformed store: {label!r} must be a list, got {type(value).__name__}")
+    return value
+
+
 def store_from_dict(data: Any) -> Store:
     """Rebuild a ``Store`` from ``store_to_dict`` output.
 
@@ -100,7 +107,9 @@ def store_from_dict(data: Any) -> Store:
             k: OrgAccount(**_require_dict(v, f"org_accounts[{k}]")) for k, v in org_accounts.items()
         },
         coupons={k: Coupon(**_require_dict(v, f"coupons[{k}]")) for k, v in coupons.items()},
-        coupon_redemptions={k: list(v) for k, v in redemptions.items()},
+        coupon_redemptions={
+            k: list(_require_list(v, f"coupon_redemptions[{k}]")) for k, v in redemptions.items()
+        },
     )
 
 

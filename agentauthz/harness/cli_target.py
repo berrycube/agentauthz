@@ -25,6 +25,7 @@ drivers are exercised only by the runner, never by the suite.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -57,10 +58,26 @@ _MCP_SERVER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp
 _CODEX_TOOL_FAILED_RE = re.compile(rf"mcp:\s*{re.escape(MCP_SERVER_NAME)}/\S+\s*\(failed\)")
 
 
-def _codex_mcp_call_failed(stdout: str) -> bool:
-    """True iff codex reported an AgentAuthZ MCP tool call as ``(failed)`` (a transport/exec
-    failure, NOT a model refusal)."""
-    return bool(_CODEX_TOOL_FAILED_RE.search(stdout or ""))
+def _codex_mcp_call_failed(text: str) -> bool:
+    """True iff ``text`` contains a codex ``mcp: <server>/<tool> (failed)`` line (a transport/exec
+    failure, NOT a model refusal). NOTE: codex prints these ``mcp:`` lines to STDERR (stdout in
+    ``codex exec`` carries only the final assistant message), so callers must scan stderr."""
+    return bool(_CODEX_TOOL_FAILED_RE.search(text or ""))
+
+
+def _codex_transport_error(returncode: int, stdout: str, stderr: str) -> str | None:
+    """Return a fail-closed CLIError reason for a codex transport/exec failure, or ``None`` for a
+    clean run (incl. a genuine model refusal — that is a real non-fire, not an error).
+
+    error != safe: a non-zero exit, OR a reported MCP tool ``(failed)`` (e.g. a restrictive
+    sandbox blocked the MCP server's run-dir write) is a transport ERROR. The ``(failed)`` lines
+    land on STDERR, so we scan BOTH streams — scanning stdout alone (the old behaviour) never
+    fired, silently miscounting every codex MCP failure as a 'safe' 0."""
+    if returncode != 0:
+        return f"codex exec exit {returncode}: {(stderr or '').strip()[:300]}"
+    if _codex_mcp_call_failed(stderr) or _codex_mcp_call_failed(stdout):
+        return "codex reported an AgentAuthZ MCP tool call as (failed)"
+    return None
 
 
 class CLIError(RuntimeError):
@@ -174,6 +191,15 @@ class ClaudeCodeDriver:
             raise CLIError("claude -p produced no result line")
         if result.get("is_error"):
             raise CLIError(f"claude -p reported error: {str(result.get('result'))[:300]}")
+        # ASYMMETRY vs CodexDriver (documented, accepted): there is no MCP-tool-(failed) guard
+        # here. Codex needs one because it OS-sandboxes the MCP server subprocess, so a
+        # restrictive sandbox blocks the run-dir write and fails the tool call. Claude Code does
+        # NOT sandbox the stdio MCP server, so that write-block transport failure cannot occur;
+        # the only residual failure is the MCP server process itself crashing, which mcp_target
+        # is built + tested to be fail-closed against. A mid-conversation MCP tool error does not
+        # set top-level is_error in --output-format json, so it is not detectable here without
+        # --output-format stream-json; given the failure mode is absent (no sandbox) we accept
+        # this as a known limitation rather than ship an untested guard. See the sweep doc caveat.
         reply = result.get("result")
         return reply if isinstance(reply, str) else ""
 
@@ -244,6 +270,10 @@ class CodexDriver:
         allowed_tools: list[str],
     ) -> str:
         last_msg_path = os.path.join(run_dir, "codex_last.txt")
+        # Remove any prior turn's last-message file so a turn that writes nothing can't be
+        # read as a STALE reply from an earlier turn (reply text feeds attacker adaptation).
+        with contextlib.suppress(OSError):
+            os.remove(last_msg_path)
         env_table = (
             "{ "
             f"AGENTAUTHZ_RUN_DIR = {self._toml_str(run_dir)}, "
@@ -270,12 +300,10 @@ class CodexDriver:
             )
         except subprocess.TimeoutExpired as exc:
             raise CLIError(f"codex exec timed out after {self.timeout}s") from exc
-        if proc.returncode != 0:
-            raise CLIError(f"codex exec exit {proc.returncode}: {proc.stderr.strip()[:300]}")
-        # error != safe: a reported MCP tool FAILURE (e.g. a restrictive sandbox blocked the
-        # run-dir write) is a transport error, NOT a clean non-fire.
-        if _codex_mcp_call_failed(proc.stdout):
-            raise CLIError("codex reported an AgentAuthZ MCP tool call as (failed)")
+        # error != safe: non-zero exit OR a reported MCP tool (failed) -> fail-closed ERROR.
+        err = _codex_transport_error(proc.returncode, proc.stdout, proc.stderr)
+        if err:
+            raise CLIError(err)
         try:
             with open(last_msg_path, encoding="utf-8") as fh:
                 return fh.read()
