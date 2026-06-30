@@ -189,8 +189,6 @@ class ClaudeCodeDriver:
         result = _parse_claude_result(proc.stdout)
         if result is None:
             raise CLIError("claude -p produced no result line")
-        if result.get("is_error"):
-            raise CLIError(f"claude -p reported error: {str(result.get('result'))[:300]}")
         # ASYMMETRY vs CodexDriver (documented, accepted): there is no MCP-tool-(failed) guard
         # here. Codex needs one because it OS-sandboxes the MCP server subprocess, so a
         # restrictive sandbox blocks the run-dir write and fails the tool call. Claude Code does
@@ -200,8 +198,7 @@ class ClaudeCodeDriver:
         # set top-level is_error in --output-format json, so it is not detectable here without
         # --output-format stream-json; given the failure mode is absent (no sandbox) we accept
         # this as a known limitation rather than ship an untested guard. See the sweep doc caveat.
-        reply = result.get("result")
-        return reply if isinstance(reply, str) else ""
+        return _claude_result_to_reply(result)
 
 
 def _parse_claude_result(stdout: str) -> dict | None:
@@ -215,6 +212,21 @@ def _parse_claude_result(stdout: str) -> dict | None:
             except (ValueError, TypeError):
                 return None
     return None
+
+
+def _claude_result_to_reply(result: dict) -> str:
+    """Validate a parsed claude ``{"type":"result",...}`` envelope and return the reply text.
+
+    error != safe: ``is_error``, OR a non-string ``result`` field (``null`` / missing / an
+    object) is a provider/format failure — NOT a clean empty reply — so it raises ``CLIError``
+    rather than being silently coerced to ``""`` (which would let the failed turn read as a
+    'safe' non-fire)."""
+    if result.get("is_error"):
+        raise CLIError(f"claude -p reported error: {str(result.get('result'))[:300]}")
+    reply = result.get("result")
+    if not isinstance(reply, str):
+        raise CLIError(f"claude -p result is not a string reply ({type(reply).__name__})")
+    return reply
 
 
 # --------------------------------------------------------------------------- #
@@ -307,10 +319,12 @@ class CodexDriver:
         try:
             with open(last_msg_path, encoding="utf-8") as fh:
                 return fh.read()
-        except OSError:
-            # exit 0 but no last-message file written: treat as an empty (genuine) reply,
-            # not an error — the tool side-effects (if any) are already in the run dir.
-            return ""
+        except OSError as exc:
+            # We removed any stale file before the run, so on a clean exit codex should have
+            # WRITTEN this --output-last-message file (a genuine empty reply still writes a
+            # zero-length file). A MISSING file is an output-wiring failure, not a clean empty
+            # reply — error != safe -> fail closed so the turn can't read as a 'safe' non-fire.
+            raise CLIError("codex exec produced no --output-last-message file") from exc
 
 
 # --------------------------------------------------------------------------- #

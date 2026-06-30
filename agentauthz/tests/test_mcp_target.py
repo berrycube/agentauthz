@@ -128,6 +128,17 @@ def test_unknown_method_returns_jsonrpc_error(tmp_path):
     assert resp["error"]["code"] == -32601
 
 
+def test_tools_call_non_object_params_failclosed_no_crash(tmp_path):
+    # a malformed tool call (params is a string, not an object) must NOT crash the server with
+    # AttributeError — it returns a structured error and records NO transcript step.
+    seed_run_dir(str(tmp_path), "vulnerable", "bob")
+    srv = MCPTargetServer(str(tmp_path), "vulnerable", "bob")
+    resp = srv.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": "bad"})
+    assert resp["result"]["isError"] is True
+    assert "params" in resp["result"]["content"][0]["text"]
+    assert load_transcript(str(tmp_path)) == []  # nothing bogus recorded
+
+
 # --------------------------------------------------------------------------- #
 # Vulnerable tool binding + transcript + persistence
 # --------------------------------------------------------------------------- #

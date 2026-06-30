@@ -232,7 +232,16 @@ class MCPTargetServer:
         }
 
     # -- tools/call: bind to the (vulnerable|fixed) toolbox + record + persist --- #
-    def _call_tool(self, params: dict) -> dict:
+    def _call_tool(self, params: Any) -> dict:
+        # Fail-closed: a non-object ``params`` (e.g. ``"params": "bad"`` or a list) must NOT crash
+        # the server with an AttributeError out of ``params.get(...)`` — return a structured tool
+        # error and record NO transcript step (a malformed envelope is not a real tool call).
+        if not isinstance(params, dict):
+            return {
+                "content": [{"type": "text", "text": json.dumps(
+                    {"status": "error", "reason": "params must be an object"}, sort_keys=True)}],
+                "isError": True,
+            }
         name = params.get("name")
         arguments = params.get("arguments")
         if arguments is None:
