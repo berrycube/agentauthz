@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import pytest
 
+import agentauthz.harness.cli_target as ct
 from agentauthz.harness.cli_target import (
     DEFAULT_ALLOWED_TOOLS,
     CLIError,
     CLITargetAgent,
+    CodexDriver,
+    _claude_result_to_reply,
     _codex_mcp_call_failed,
     _codex_transport_error,
     _parse_claude_result,
@@ -128,6 +131,37 @@ def test_parse_claude_result_extracts_result_line_amid_debug_noise():
 
 def test_parse_claude_result_none_when_absent():
     assert _parse_claude_result("just debug noise\nno result line here\n") is None
+
+
+def test_claude_result_to_reply_failclosed_on_non_string_or_error():
+    # a clean string reply passes through
+    assert _claude_result_to_reply({"is_error": False, "result": "DONE"}) == "DONE"
+    # is_error -> CLIError (never a silent empty reply)
+    with pytest.raises(CLIError):
+        _claude_result_to_reply({"is_error": True, "result": "model access 404"})
+    # result: null / missing / object is a provider-format failure -> CLIError (error != safe)
+    with pytest.raises(CLIError):
+        _claude_result_to_reply({"is_error": False, "result": None})
+    with pytest.raises(CLIError):
+        _claude_result_to_reply({"is_error": False})
+    with pytest.raises(CLIError):
+        _claude_result_to_reply({"is_error": False, "result": {"nested": "obj"}})
+
+
+def test_codex_missing_last_message_file_is_failclosed_error(tmp_path, monkeypatch):
+    # exit 0, no (failed) marker, but codex wrote NO --output-last-message file -> output-wiring
+    # failure must be a fail-closed ERROR, not a 'safe' empty reply. (subprocess.run is mocked —
+    # no real subprocess: the fake "codex" writes nothing.)
+    class _FakeProc:
+        returncode = 0
+        stdout = "clean reply on stdout"
+        stderr = ""  # no `mcp: agentauthz/... (failed)` line
+
+    monkeypatch.setattr(ct.subprocess, "run", lambda *a, **k: _FakeProc())
+    drv = CodexDriver("gpt-5.5")
+    with pytest.raises(CLIError):
+        drv.run_turn("hi", run_dir=str(tmp_path), target="vulnerable",
+                     session_customer_id="bob", system_prompt="sys", allowed_tools=[])
 
 
 def test_codex_mcp_call_failed_detects_failure_not_success():
