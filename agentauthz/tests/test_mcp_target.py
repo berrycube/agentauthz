@@ -128,15 +128,26 @@ def test_unknown_method_returns_jsonrpc_error(tmp_path):
     assert resp["error"]["code"] == -32601
 
 
-def test_tools_call_non_object_params_failclosed_no_crash(tmp_path):
-    # a malformed tool call (params is a string, not an object) must NOT crash the server with
-    # AttributeError — it returns a structured error and records NO transcript step.
+@pytest.mark.parametrize("bad_params", ["bad", [], "", None, 1, 2.5, True])
+def test_tools_call_non_object_params_failclosed_no_crash(tmp_path, bad_params):
+    # A malformed tool call whose params is NOT an object — incl. falsey ones (None / [] / "")
+    # that must not be coerced to {} — returns a structured error, records NO transcript step,
+    # and never crashes the stdio loop.
     seed_run_dir(str(tmp_path), "vulnerable", "bob")
     srv = MCPTargetServer(str(tmp_path), "vulnerable", "bob")
-    resp = srv.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": "bad"})
+    resp = srv.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": bad_params})
     assert resp["result"]["isError"] is True
     assert "params" in resp["result"]["content"][0]["text"]
     assert load_transcript(str(tmp_path)) == []  # nothing bogus recorded
+
+
+def test_tools_call_missing_params_failclosed(tmp_path):
+    # A tools/call with NO params key at all is a malformed envelope -> structured error, no step.
+    seed_run_dir(str(tmp_path), "vulnerable", "bob")
+    srv = MCPTargetServer(str(tmp_path), "vulnerable", "bob")
+    resp = srv.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call"})
+    assert resp["result"]["isError"] is True
+    assert load_transcript(str(tmp_path)) == []
 
 
 # --------------------------------------------------------------------------- #

@@ -220,7 +220,10 @@ class MCPTargetServer:
         if method == "tools/list":
             return self._ok(mid, {"tools": mcp_tool_schemas()})
         if method == "tools/call":
-            return self._ok(mid, self._call_tool(request.get("params") or {}))
+            # Pass RAW params (no ``or {}``): a falsey non-object (None / [] / "") must reach
+            # _call_tool's non-dict guard, not be silently coerced to {} (which would record a
+            # bogus ``{"tool": null, ...}`` step with isError=False).
+            return self._ok(mid, self._call_tool(request.get("params")))
         if isinstance(method, str) and method.startswith("notifications/"):
             return None
         if mid is None:
