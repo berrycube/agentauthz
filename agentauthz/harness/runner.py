@@ -36,61 +36,6 @@ __all__ = ["run_benchmark", "main"]
 
 
 # ---------------------------------------------------------------------------
-# Graceful-exhaustion wrapper for injected LLM clients
-# ---------------------------------------------------------------------------
-
-
-class _ExhaustionSafeLLM:
-    """Thin wrapper that turns a script-exhausted ``FakeLLM`` into a graceful
-    empty response, WITHOUT swallowing any other failure.
-
-    This lets the attacker loop in ``run_attack`` treat script exhaustion as a
-    graceful give-up (``content=None`` → ``not isinstance(msg, str)`` → ``break``)
-    rather than crashing.  The ``FakeLLM`` design raises ``AssertionError`` on
-    exhaustion to catch bugs in the AGENT loop (too many turns requested); here
-    the ATTACKER seat may have fewer scripted turns than ``scenario.max_turns`` —
-    for the fixed target where no scenario fires, the attacker can only contribute
-    one message before the script is spent.
-
-    REPORT-FIDELITY: we MUST NOT catch a bare ``AssertionError`` — that would also
-    swallow the attacker LLM's own internal assertions, the test's offline/network
-    guard, and any message-shape validation, masking a real harness/invariant
-    failure as a benign "attack not triggered" (a silent ``fired=False``).  So
-    instead of catching exhaustion AFTER the fact, we DETECT it BEFORE delegating:
-    a ``FakeLLM`` exposes the scripted turns it has left (``_responses``/``_index``),
-    so we can recognise "no turns remain" precisely and return the give-up sentinel
-    only for that exact condition.  Every real call is delegated verbatim and any
-    exception it raises propagates untouched.
-    """
-
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
-
-    def complete(self, messages: Any, tools: Any) -> Any:
-        if self._is_exhausted_fake():
-            # The scripted fake has no turns left: signal give-up to run_attack
-            # WITHOUT letting (or relying on) any exception be swallowed.
-            return LLMResponse([], None)
-        return self._inner.complete(messages, tools)
-
-    def _is_exhausted_fake(self) -> bool:
-        """True iff ``inner`` is a scripted fake (duck-typed: integer ``_index`` +
-        sized ``_responses``) whose script is spent.  Anything that does not expose
-        BOTH a script cursor and a sized script (e.g. the real ``_OllamaClient``, or
-        any non-fake client) is never treated as exhausted — its ``complete`` is
-        always called and its errors always surface."""
-        index = getattr(self._inner, "_index", None)
-        responses = getattr(self._inner, "_responses", None)
-        if not isinstance(index, int) or isinstance(index, bool):
-            return False
-        try:
-            remaining = len(responses)
-        except TypeError:
-            return False
-        return index >= remaining
-
-
-# ---------------------------------------------------------------------------
 # Fail-closed Ollama client (used ONLY by main() under --live; never in tests)
 # ---------------------------------------------------------------------------
 # The client connects to a local Ollama server via HTTP POST to
@@ -243,7 +188,6 @@ def run_benchmark(
     target: str,
     *,
     target_llm_for: Callable[[Any], Any],
-    attacker_llm_for: Callable[[Any], Any],
 ) -> Report:
     """Run all ``scenarios`` against ``target`` and return a structured ``Report``.
 
@@ -254,9 +198,9 @@ def run_benchmark(
     - ``seed_store()`` builds a FRESH independent store (mutation isolation).
     - ``target_llm_for(sc)`` builds a FRESH target-seat LLM (stateful fakes must
       reset between scenarios).
-    - ``attacker_llm_for(sc)`` builds a FRESH attacker-seat LLM.
     - The target agent (``Agent`` or ``FixedAgent``) is constructed over the store.
-    - ``run_attack`` drives the multi-turn loop and returns an ``AttackRun``.
+    - ``run_attack`` drives the deterministic scripted attack (the scenario's
+      ``attacker_script``) and returns an ``AttackRun``.
     - The ``AttackRun``'s ``verdict`` is recorded; fired scenarios append a ``finding``
       (with transcript + evidence) and increment the ``by_vulnerability`` counter.
     """
@@ -272,16 +216,13 @@ def run_benchmark(
         # Fresh store per scenario — prevents cross-scenario state leakage.
         store = seed_store()
         llm = target_llm_for(sc)
-        attacker_llm = attacker_llm_for(sc)
 
         if target == "vulnerable":
             agent = Agent(llm, store, sc.session_customer_id)
         else:
             agent = FixedAgent(llm, store, sc.session_customer_id)
 
-        # Wrap attacker LLM so script exhaustion is a graceful give-up, not a crash.
-        safe_attacker_llm = _ExhaustionSafeLLM(attacker_llm)
-        run = run_attack(sc, agent, safe_attacker_llm)
+        run = run_attack(sc, agent)
         v = run.verdict
 
         results.append(
@@ -370,15 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     def target_llm_for(sc: Any) -> _OllamaClient:  # noqa: ARG001
         return _OllamaClient(model=args.model)
 
-    def attacker_llm_for(sc: Any) -> _OllamaClient:  # noqa: ARG001
-        return _OllamaClient(model=args.model)
-
-    report = run_benchmark(
-        scenarios,
-        args.target,
-        target_llm_for=target_llm_for,
-        attacker_llm_for=attacker_llm_for,
-    )
+    report = run_benchmark(scenarios, args.target, target_llm_for=target_llm_for)
 
     report_json = report.to_json()
     if args.out is not None:
