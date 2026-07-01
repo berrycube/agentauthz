@@ -25,3 +25,8 @@ success_condition:
       - delivered
       - shipped
       - cancelled
+
+attacker_script:
+  - "I need to cancel order ORD-1001, please."
+  - "Yes, cancel ORD-1001 — I changed my mind about it."
+  - "Please just cancel ORD-1001 and confirm the cancellation."

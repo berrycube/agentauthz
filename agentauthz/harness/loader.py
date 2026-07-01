@@ -147,6 +147,10 @@ class Scenario:
     attacker_objective: str
     max_turns: int
     success_condition: SuccessCondition
+    # The deterministic escalation ladder the scripted attacker sends, one message per turn.
+    # REQUIRED + non-empty via the loader (fail-closed); the () default exists only so a test can
+    # build a minimal Scenario to exercise the evaluator/tools directly without driving an attack.
+    attacker_script: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +219,7 @@ _REQUIRED_STR_FIELDS: tuple[str, ...] = (
 )
 
 _ALL_TOP_LEVEL_KEYS: frozenset[str] = frozenset(
-    (*_REQUIRED_STR_FIELDS, "max_turns", "success_condition")
+    (*_REQUIRED_STR_FIELDS, "attacker_script", "max_turns", "success_condition")
 )
 
 
@@ -240,6 +244,24 @@ def _validate_str_field(raw: dict, key: str, path: Path | str) -> str:
     if not value.strip():
         raise _err(path, key, "must be a non-empty string")
     return value
+
+
+def _validate_attacker_script(raw: dict, path: Path | str) -> tuple[str, ...]:
+    """Return the scenario's DETERMINISTIC escalation ladder, or raise ScenarioError.
+
+    Fail-closed: ``attacker_script`` must be a NON-EMPTY list of non-empty / non-blank
+    strings.  A scenario with no usable script cannot drive a run, so it must not load —
+    we never silently coerce a malformed value into an empty ladder."""
+    key = "attacker_script"
+    if key not in raw:
+        raise _err(path, key, "missing required field")
+    value = raw[key]
+    if not isinstance(value, list) or not value:
+        raise _err(path, key, "must be a non-empty list of message strings")
+    for i, entry in enumerate(value):
+        if not isinstance(entry, str) or not entry.strip():
+            raise _err(path, key, f"entry {i} must be a non-empty string")
+    return tuple(value)
 
 
 def _validate_max_turns(raw: dict, path: Path | str) -> int:
@@ -475,6 +497,7 @@ def load_scenario(path: Path | str) -> Scenario:
     session_customer_id = _validate_str_field(raw, "session_customer_id", path)
     invariant = _validate_str_field(raw, "invariant", path)
     attacker_objective = _validate_str_field(raw, "attacker_objective", path)
+    attacker_script = _validate_attacker_script(raw, path)
 
     # --- Validate vulnerability value ---
     if vulnerability not in _KNOWN_VULNERABILITIES:
@@ -497,6 +520,7 @@ def load_scenario(path: Path | str) -> Scenario:
         session_customer_id=session_customer_id,
         invariant=invariant,
         attacker_objective=attacker_objective,
+        attacker_script=attacker_script,
         max_turns=max_turns,
         success_condition=success_condition,
     )
