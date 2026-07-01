@@ -371,6 +371,6 @@ keep its findings trustworthy:
 - **next:** the same flaw classes reproduced across multiple agent frameworks — to show these
   are *patterns*, not one framework's bug.
 
-Building toward an open benchmark for **agent business-logic security**. Want to follow
-along, or get notified as new scenarios and targets land? Reach out at
-**wangxian@berrycube.com**.
+Building toward an open benchmark for **agent business-logic security**. If it's useful,
+**⭐ star the repo** — that's the most useful signal to me, and how you'll catch new scenarios
+and targets. Questions or ideas? Reach out at **wangxian@berrycube.com**.

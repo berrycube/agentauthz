@@ -20,8 +20,8 @@ reproduces every flaw and binds exact evidence. A `fixed/` reference closes all 
 **offline and deterministically** by default; a real local model is used only under an
 explicit `--live` flag, never in the test suite.
 
-📬 **Follow along** — [subscribe to the newsletter](https://buttondown.com/agentauthz) ·
-⭐ star the repo to track new scenarios, targets, and the hosted labs.
+⭐ **Find this useful?** Star the repo — it's the best signal that this line of work is worth
+continuing, and it's how you'll catch new scenarios, targets, and the hosted labs.
 
 > *Formerly "DVAA / Damn Vulnerable AI Agent" — renamed to put the access-control thesis in
 > the name and avoid confusion with the similarly-named
@@ -189,6 +189,6 @@ Building toward an open benchmark for **agent business-logic & authorization sec
 
 ### Follow along
 
-Get notified as new scenarios, targets, and the hosted labs land:
-**[subscribe to the newsletter](https://buttondown.com/agentauthz)**, or reach out at
+If this is useful, **⭐ star the repo** — that's the most useful signal to me, and how you'll
+catch new scenarios, targets, and the hosted labs as they land. Questions or ideas? Reach out at
 **wangxian@berrycube.com**.

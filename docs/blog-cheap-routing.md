@@ -155,6 +155,6 @@ The harness is open and runs offline on a laptop — six planted classes, a `fix
 that closes all of them, a deterministic evaluator that binds exact evidence, and the full
 cross-model study with the reproduce command:
 
-**→ Repo: https://github.com/berrycube/agentauthz**
+**→ Repo: https://github.com/berrycube/agentauthz** — ⭐ star it if this was useful; that's the
+best signal to keep this line of work going (and how you'll catch new scenarios and targets).
 **→ Full study: [`cross-model-sweep.md`](cross-model-sweep.md)**
-**→ Get notified as new scenarios, targets, and hosted labs land: [subscribe](https://buttondown.com/agentauthz)**
