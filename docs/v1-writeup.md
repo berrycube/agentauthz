@@ -8,7 +8,7 @@
 AgentAuthZ ships a small, realistic e-commerce support agent with **six intentionally
 planted vulnerabilities** (account-takeover, IDOR, refund-gate, state-machine ordering,
 cross-tenant isolation, and one-time-limit replay), a **declarative scenario format** that
-lets a human state the business invariant each one violates, and a **multi-turn LLM
+lets a human state the business invariant each one violates, and a **deterministic scripted
 attacker + deterministic evaluator** that automatically reproduces every flaw and binds
 exact evidence. A `fixed/` reference implementation closes all six — proving the invariants
 *can* be held without over-blocking legitimate use.
@@ -30,8 +30,8 @@ flaw, you **declare** the flaw as a scenario, and the harness automates the atta
 
 | | v0 (hand-written exploits) | v1 (automated benchmark) |
 |---|---|---|
-| **How a flaw is expressed** | a bespoke `reproduce(agent)` function | a declarative **YAML scenario**: invariant + attacker objective + machine-checkable success condition + `max_turns` |
-| **Who drives the attack** | a fixed, scripted tool call | a **multi-turn LLM attacker** that social-engineers the agent over several turns and self-adapts |
+| **How a flaw is expressed** | a bespoke `reproduce(agent)` function | a declarative **YAML scenario**: invariant + **attacker script** (escalation ladder) + machine-checkable success condition + `max_turns` |
+| **Who drives the attack** | a fixed, scripted tool call in bespoke code | a **deterministic multi-turn escalation script**, declared per scenario, that the harness replays turn-by-turn — no attacker model, no bespoke code |
 | **How success is decided** | an assertion inside the exploit | a **deterministic evaluator** that checks the invariant after each turn and binds the exact store field / transcript step as evidence |
 | **What you get back** | a pass/fail test | a **structured report**: per-scenario verdicts, only-fired findings with transcript evidence, and a summary |
 | **Proof it's fixable** | a `fixed/` preview (described only) | a working `fixed/` reference: `--target vulnerable` finds all 6; `--target fixed` finds 0 |
@@ -55,9 +55,9 @@ AgentAuthZ's stance:
 > **The invariant is declared by a human. The automation is the attack.**
 
 AgentAuthZ does *not* infer your business rules. You write them down once, as a scenario.
-From there the harness does the labor-intensive part: an LLM attacker tries to make the
-agent violate the rule, and a deterministic evaluator decides — with bound, exact evidence —
-whether the rule held. That division of labor is what makes the approach both *honest* (no
+From there the harness does the labor-intensive part: a **deterministic scripted attacker**
+(the scenario's declared escalation ladder) drives the agent to try to violate the rule, and
+a deterministic evaluator decides — with bound, exact evidence — whether the rule held. That division of labor is what makes the approach both *honest* (no
 guessed rules, no fabricated findings) and *scalable* (one declaration, fully automated
 reproduction).
 
@@ -75,7 +75,7 @@ under test is the agent (or its `fixed/` counterpart):
 
 ```
 scenarios/*.yaml ─▶ loader.py ─▶ attacker.py ──drives──▶ TARGET agent (vulnerable | fixed)
- (human-declared    (parse +     (multi-turn               + store + tool transcript
+ (human-declared    (parse +     (scripted                 + store + tool transcript
   invariants)        validate)    attack loop)                    │
                                        │  checks after each turn  │
                                        ▼                          ▼
@@ -87,13 +87,14 @@ scenarios/*.yaml ─▶ loader.py ─▶ attacker.py ──drives──▶ TARGE
 
 **The pieces (all under `agentauthz/`):**
 
-- **`scenarios/*.yaml`** — human-declared scenarios. Each pins one invariant, an attacker
-  objective, a machine-checkable `success_condition`, and a turn budget.
+- **`scenarios/*.yaml`** — human-declared scenarios. Each pins one invariant, an
+  **`attacker_script`** (the per-turn escalation messages that drive the attack), a
+  machine-checkable `success_condition`, and a turn budget.
 - **`harness/loader.py`** — parses and **fail-closed validates** a scenario into a typed,
   frozen `Scenario`; a malformed scenario raises `ScenarioError` rather than coercing.
-- **`harness/attacker.py`** — `run_attack(scenario, target_agent, attacker_llm)` runs a
-  bounded multi-turn loop (attacker LLM is a scripted `FakeLLM` in tests, Ollama under
-  `--live`): the attacker emits the next message, the target processes it, the evaluator
+- **`harness/attacker.py`** — `run_attack(scenario, target_agent)` runs a bounded multi-turn
+  loop driven by the scenario's **`attacker_script`** (a fixed escalation ladder, no attacker
+  model): each turn sends the next scripted message, the target processes it, the evaluator
   checks, and the loop stops the moment the invariant breaks (or at `max_turns`). Returns an
   `AttackRun` with the dialogue, the tool transcript, and the verdict.
 - **`harness/evaluator.py`** — `evaluate(scenario, agent)` deterministically decides whether
@@ -188,16 +189,16 @@ pip install pytest pyyaml
 
 ### Run the deterministic, offline test suite — this reproduces all six vulns
 
-The whole suite is deterministic and makes **no network calls** — every LLM seat (both the
-attacker and the target) is driven by a scripted fake. This is what reproduces all six
-vulnerabilities in CI, and what produces the benchmark reports shown below.
+The whole suite is deterministic and makes **no network calls** — the attacker is a fixed
+per-scenario script and the target's LLM seat is driven by a scripted fake. This is what
+reproduces all six vulnerabilities in CI, and what produces the benchmark reports shown below.
 
 ```bash
 python3 -m pytest agentauthz/tests
 ```
 
 ```
-111 passed in 0.6s
+160 passed
 ```
 
 ### Run the benchmark against the *vulnerable* target — expect 6 findings
@@ -318,12 +319,13 @@ reports `fired: false` with a detail explaining *why* nothing fired, such as
 `no transcript step from tool 'get_org_account' leaked a foreign org's account` (V5), and
 `no one-time resource was replayed via tool 'redeem_coupon'` (V6).
 
-### `--live` mode (real local LLM) — manual only
+### `--live` mode (real local LLM target) — manual only
 
 The runner accepts `--live`, which drives a **real local model** (Ollama at
-`http://localhost:11434`, model from `$LLM_MODEL` / `--model`) as the attacker, instead of
-the scripted fake. `--live` is intentionally a **manual** path: real LLMs are
-non-deterministic and require the network, so they are **never** part of the pytest suite.
+`http://localhost:11434`, model from `$LLM_MODEL` / `--model`) as the **target agent** — the
+attacker is always the deterministic script. `--live` is intentionally a **manual** path:
+real LLMs are non-deterministic and require the network, so they are **never** part of the
+pytest suite.
 
 ```bash
 python -m agentauthz.harness.runner --target vulnerable --scenarios agentauthz/scenarios --live
@@ -336,10 +338,10 @@ python -m agentauthz.harness.runner --target vulnerable --scenarios agentauthz/s
 The harness is **correct, secure code** — not a planted vulnerability. Three disciplines
 keep its findings trustworthy:
 
-- **Deterministic and offline by default.** Both LLM seats — the attacker that drives the
-  agent and the LLM the target itself uses — are injectable, and the test suite injects a
-  scripted fake for each. There is no real model and no network in the suite; one test even
-  disables `socket` entirely to prove a run only ever touches the in-repo agent.
+- **Deterministic and offline by default.** The attacker is a fixed per-scenario script (no
+  model), and the target's LLM seat is injectable — the test suite injects a scripted fake for
+  it. There is no real model and no network in the suite; one test even disables `socket`
+  entirely to prove a run only ever touches the in-repo agent.
 - **A fail-closed evaluator that never fabricates findings.** The evaluator reports a
   violation only when it can bind **exact** evidence — the changed store field, or the
   precise transcript step. If a result is malformed, an owner field is missing, a customer or
@@ -359,8 +361,8 @@ keep its findings trustworthy:
 
 - **v0:** the minimal reproducible vulnerable agent + three hand-written exploits + write-up.
 - **v1:** declarative YAML scenarios, a fail-closed loader, a deterministic evaluator that
-  binds exact evidence, a multi-turn LLM attacker harness, the `fixed/` reference, and the
-  benchmark runner.
+  binds exact evidence, a deterministic scripted multi-turn attacker, the `fixed/` reference,
+  and the benchmark runner.
 - **v1.2 (this release):** three more vulnerability classes — **V4** state-machine ordering,
   **V5** cross-tenant isolation, **V6** one-time-limit replay — each with its `fixed/`
   counterpart, plus a **cross-model study** that reproduces the flaws across different open

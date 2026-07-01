@@ -52,7 +52,7 @@ Three things fall out of this — and they're the whole reason AgentAuthZ exists
 1. **The reads are universal.** V2 (read a foreign order) and V5 (read a foreign org's
    billing) fire **5/5 on every tool-capable model**, regardless of size or alignment.
    Reading a record back *reads as helpful*, so it never trips the model's "this is harmful"
-   sense. (Both also fire **5/5** on two frontier `deepseek-v4` cloud tiers and on Claude via
+   sense. (Both also fire **5/5** on two `deepseek-v4` cloud tiers and on Claude via
    Claude Code.)
 2. **The writes fire almost as often — persistence beats alignment.** Under a script that
    keeps naming the exact target ids, the greedy write flaws (V3/V4/V6) fire **3–5/5 on both
