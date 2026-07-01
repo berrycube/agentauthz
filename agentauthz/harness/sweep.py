@@ -5,15 +5,15 @@ The sweep answers the productizable question: *does it reproduce across DIFFEREN
 brains, or was a single "the model refused" run just one model's judgement on one day?*
 
 ``sweep_models`` runs the existing ``run_benchmark`` ``repeats`` times per TARGET
-model — holding ONE attacker model CONSTANT — and aggregates a per-(model, vulnerability)
-FIRE RATE (``fired_count / repeats``) into a ``SweepReport`` matrix.  Holding the attacker
-constant and varying only the target isolates the TARGET model as the single variable: a
-low fire rate then means "this target resisted", not "the attacker was too weak to land
-the attack" (a model that is merely bad at tool-calling fails in BOTH seats, which would
-otherwise read a weak model as a falsely "safe" one).
+model — the attacker is the deterministic per-scenario script, held perfectly constant —
+and aggregates a per-(model, vulnerability) FIRE RATE (``fired_count / repeats``) into a
+``SweepReport`` matrix.  A fixed script (not an LLM) makes the TARGET model the single
+variable: a low fire rate then means "this target resisted", not "the attacker was too weak
+to land the attack or drifted"; and the script can neither error nor invent identifiers.
 
 DETERMINISM + OFFLINE: ``sweep_models`` takes
-an INJECTED ``client_for(model_spec, seat)`` factory — tests inject scripted fakes; the
+an INJECTED ``client_for(model_spec, seat)`` TARGET factory (``seat`` is always ``"target"``)
+— tests inject scripted fakes; the
 ``--live`` CLI injects real clients (local Ollama via the ``_OllamaClient``, and any
 OpenAI-compatible endpoint such as DeepSeek via ``OpenAICompatClient``).  The library path
 NEVER touches the network; only ``main(--live)`` does.  The runner only ever drives the
@@ -64,7 +64,7 @@ class SweepReport:
 
     target: str
     repeats: int
-    attacker_model: str
+    attacker: str
     target_models: list
     cells: list = field(default_factory=list)
 
@@ -72,7 +72,7 @@ class SweepReport:
         return {
             "target": self.target,
             "repeats": self.repeats,
-            "attacker_model": self.attacker_model,
+            "attacker": self.attacker,
             "target_models": list(self.target_models),
             "cells": [dict(c) for c in self.cells],
         }
@@ -86,7 +86,7 @@ class SweepReport:
         lines: list[str] = [
             f"# Cross-model vulnerability sweep — target: `{self.target}`",
             "",
-            f"**Attacker model (held constant):** `{self.attacker_model}`  ·  "
+            f"**Attacker (held constant):** {self.attacker}  ·  "
             f"**Repeats per cell:** {self.repeats}",
             "",
         ]
@@ -164,17 +164,17 @@ class _ErrorTrackingClient:
         return resp
 
     def __getattr__(self, name: str) -> Any:
-        # Transparently proxy any other attribute to the wrapped client so duck-typed
-        # introspection still works THROUGH the wrapper — notably run_attack's
-        # _ExhaustionSafeLLM, which reads a scripted fake's `_index`/`_responses` to detect
-        # graceful give-up.  (Real live clients lack those attrs -> AttributeError -> the
-        # caller's getattr default applies, exactly as without the wrapper.)
+        # Transparently proxy any other attribute to the wrapped target client so the wrapper
+        # is a drop-in stand-in (duck-typed introspection still works THROUGH it).
         if name == "_inner":  # not yet set (partial construction) -> avoid infinite recursion
             raise AttributeError(name)
         return getattr(self._inner, name)
 
 
-def _validate_inputs(target_models: Any, attacker_model: Any, target: Any, repeats: Any) -> None:
+_SCRIPTED_ATTACKER = "deterministic per-scenario script"
+
+
+def _validate_inputs(target_models: Any, target: Any, repeats: Any) -> None:
     """Fail-closed on every malformed input (never silently produce an empty/garbage sweep)."""
     if target not in ("vulnerable", "fixed"):
         raise ValueError(f"unknown target {target!r} (expected 'vulnerable' or 'fixed')")
@@ -186,27 +186,25 @@ def _validate_inputs(target_models: Any, attacker_model: Any, target: Any, repea
     for m in target_models:
         if not isinstance(m, str) or not m.strip():
             raise ValueError(f"each target model must be a non-empty string, got {m!r}")
-    if not isinstance(attacker_model, str) or not attacker_model.strip():
-        raise ValueError(f"attacker_model must be a non-empty string, got {attacker_model!r}")
 
 
 def sweep_models(
     target_models: list,
-    attacker_model: str,
     scenarios: Any,
     target: str,
     *,
     repeats: int,
     client_for: Callable[[str, str], Any],
 ) -> SweepReport:
-    """Run ``scenarios`` against each target model ``repeats`` times (attacker held at
-    ``attacker_model``) and aggregate a per-(model, vulnerability) fire-rate ``SweepReport``.
+    """Run ``scenarios`` against each target model ``repeats`` times — the attacker is the
+    deterministic per-scenario script (held perfectly constant) so the only variable is the
+    target — and aggregate a per-(model, vulnerability) fire-rate ``SweepReport``.
 
-    ``client_for(model_spec, seat)`` builds a FRESH LLM client for ``seat`` in
-    ``{"target", "attacker"}`` — fresh because scripted fakes (and stateful live clients)
-    must not be reused across scenarios/repeats.
+    ``client_for(model_spec, seat)`` builds a FRESH TARGET LLM client (``seat`` is always
+    ``"target"`` now the attacker seat is gone) — fresh because scripted fakes / stateful live
+    clients must not be reused across scenarios/repeats.
     """
-    _validate_inputs(target_models, attacker_model, target, repeats)
+    _validate_inputs(target_models, target, repeats)
     scenarios = list(scenarios)
 
     cells: list[dict] = []
@@ -214,34 +212,22 @@ def sweep_models(
         fired_counts: dict[str, int] = {sc.id: 0 for sc in scenarios}
         error_counts: dict[str, int] = {sc.id: 0 for sc in scenarios}
         for _ in range(repeats):
-            # Per-run error sinks, kept SEPARATE BY SEAT: a live client that returns a
-            # fail-closed error sentinel sets its seat's sink for that scenario.
+            # A live TARGET client that returns a fail-closed error sentinel sets this sink for
+            # that scenario (the scripted attacker cannot error, so there is no attacker sink).
             tgt_errored: dict[str, bool] = {}
-            atk_errored: dict[str, bool] = {}
             report = run_benchmark(
                 scenarios,
                 target,
-                # _tm / _sink default-bind the loop+run state (no late-binding closure bug);
-                # the attacker factory closes over the CONSTANT attacker_model.
                 target_llm_for=lambda sc, _tm=tm, _sink=tgt_errored: _ErrorTrackingClient(
                     client_for(_tm, "target"), _sink, sc.id
-                ),
-                attacker_llm_for=lambda sc, _sink=atk_errored: _ErrorTrackingClient(
-                    client_for(attacker_model, "attacker"), _sink, sc.id
                 ),
             )
             for res in report.results:
                 sid = res["scenario_id"]
-                # Seat-aware accounting:
-                # 1. ATTACKER error -> the attack never really ran (a broken attacker
-                #    endpoint must NOT look like a valid exploit) -> ERROR, even if the
-                #    scripted/garbage message happened to make the target fire.
-                # 2. else a deterministic FIRE is ground truth (the evaluator saw the
-                #    violation) -> a TARGET error LATER in the run cannot erase it -> FIRE.
-                # 3. else a TARGET error on a non-fired run -> untrustworthy non-fire -> ERROR.
-                if atk_errored.get(sid):
-                    error_counts[sid] += 1
-                elif res.get("fired"):
+                # error != safe: a deterministic FIRE is ground truth (a TARGET error later in
+                # the run cannot erase it); else a TARGET error on a non-fired run is an
+                # untrustworthy non-fire -> ERROR (excluded from the denominator, never a safe 0).
+                if res.get("fired"):
                     fired_counts[sid] += 1
                 elif tgt_errored.get(sid):
                     error_counts[sid] += 1
@@ -267,7 +253,7 @@ def sweep_models(
     return SweepReport(
         target=target,
         repeats=repeats,
-        attacker_model=attacker_model,
+        attacker=_SCRIPTED_ATTACKER,
         target_models=list(target_models),
         cells=cells,
     )
@@ -394,7 +380,7 @@ class OpenAICompatClient:
                 "stream": False,
             }
             otools = _to_openai_tools(tools)
-            if otools:  # attacker seat passes [] -> omit tools entirely
+            if otools:  # omit the tools key entirely when there are none to send
                 payload["tools"] = otools
                 payload["tool_choice"] = "auto"
             body = json.dumps(payload, default=str).encode("utf-8")
@@ -471,7 +457,7 @@ def _build_live_client(model_spec: str, seat: str) -> Any:  # noqa: ARG001  (sea
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: sweep a fire-rate matrix across target models (attacker held constant).
+    """CLI: sweep a fire-rate matrix across target models (attacker = per-scenario script).
 
     Requires ``--live`` to contact real models — WITHOUT it the CLI refuses and returns 2
     (no network in the library path; tests call ``sweep_models()`` with injected fakes)."""
@@ -483,11 +469,6 @@ def main(argv: list[str] | None = None) -> int:
         "--target-models",
         required=True,
         help="comma-separated model specs, e.g. 'ollama:llama3.2,deepseek:deepseek-v4-pro'",
-    )
-    parser.add_argument(
-        "--attacker-model",
-        required=True,
-        help="the single attacker model spec, held CONSTANT across the sweep",
     )
     parser.add_argument("--repeats", type=int, default=5, help="runs per (model, scenario) cell")
     parser.add_argument("--scenarios", default="agentauthz/scenarios")
@@ -529,7 +510,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         for spec in target_models:
             _build_live_client(spec, "target")
-        _build_live_client(args.attacker_model, "attacker")
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -537,7 +517,6 @@ def main(argv: list[str] | None = None) -> int:
     scenarios = load_scenarios(args.scenarios)
     report = sweep_models(
         target_models=target_models,
-        attacker_model=args.attacker_model,
         scenarios=scenarios,
         target=args.target,
         repeats=args.repeats,
